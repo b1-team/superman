@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, arg_required_else_help = true)]
 pub struct Args {
     #[arg(short, long, help = "Pid to kill")]
     pub pid: u32,
