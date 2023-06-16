@@ -1,5 +1,3 @@
-use std::io::Write;
-
 fn main() {
     let mut res = winres::WindowsResource::new();
     res.set_manifest(
@@ -16,11 +14,8 @@ fn main() {
 "#,
     );
 
-    match res.compile() {
-        Err(e) => {
-            write!(std::io::stderr(), "{}", e).unwrap();
-            std::process::exit(1);
-        }
-        Ok(_) => (),
+    if let Err(e) = res.compile() {
+        eprintln!("{}", e);
+        std::process::exit(1);
     }
 }

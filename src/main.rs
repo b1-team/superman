@@ -4,66 +4,68 @@ mod greet;
 mod utils;
 
 use crate::args::Args;
-use crate::driver::{kill_pid, load_driver, unload_delete_driver};
+use crate::driver::{kill_pid, load_driver, unload_driver};
 use crate::utils::check_pid;
 use anyhow::anyhow;
 use clap::Parser;
-use ctor::{ctor, dtor};
-use once_cell::sync::OnceCell;
-use std::ffi::CString;
-use std::fs;
+use std::ffi::CStr;
 use std::ops::Not;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Acquire, Release};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
+use std::{fs, process};
 
-const DRIVER: &[u8] = include_bytes!("../driver/superman.sys");
-static DRIVER_PATH: OnceCell<PathBuf> = OnceCell::new();
-static EXIT: AtomicBool = AtomicBool::new(false);
+fn init(sx: SyncSender<bool>) -> anyhow::Result<PathBuf> {
+    let driver = include_bytes!("../driver/superman.sys");
 
-#[ctor]
-fn init() {
     greet::greeting();
 
-    ctrlc::set_handler(|| {
-        if EXIT.load(Acquire).not() {
-            println!("[+]Bye!");
-            EXIT.store(true, Release);
-        }
-    })
-    .unwrap();
+    ctrlc::set_handler(move || {
+        println!("[+]Bye!");
+        sx.send(true).unwrap();
+    })?;
 
-    let mut path = dirs::cache_dir().or(Some("C:\\Windows".into())).unwrap();
+    let mut path = dirs::cache_dir().unwrap_or("C:\\Windows".into());
     path.push("Temp");
 
     if path.exists().not() {
-        fs::create_dir_all(&path).unwrap();
+        fs::create_dir_all(&path)?;
     }
 
     path.push("superman");
-    DRIVER_PATH.set(path).unwrap();
+
+    if path.exists().not() {
+        fs::write(&path, driver)?;
+    }
+
+    Ok(path)
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     let args = Args::parse();
-    let driver_path = DRIVER_PATH.get().unwrap().to_owned();
+
+    if let Err(e) = try_main(&args) {
+        eprintln!("{}", e);
+        process::exit(1);
+    }
+}
+
+fn try_main(args: &Args) -> anyhow::Result<()> {
+    let (sx, rx) = mpsc::sync_channel(1);
+
+    let path = init(sx)?;
+    let service_name: &CStr = CStr::from_bytes_with_nul(b"superman\0").unwrap();
+
+    let driver: (&Path, &CStr) = (&path, service_name);
 
     if check_pid(args.pid).not() {
         return Err(anyhow!("[-]Process not exists!"));
     }
 
-    if driver_path.exists().not() {
-        fs::write(&driver_path, DRIVER)?;
-    }
+    load_driver(driver)?;
 
-    load_driver(CString::new(driver_path.to_str().unwrap())?.as_c_str())?;
+    kill_pid(args, driver, rx)?;
 
-    kill_pid(args)?;
-
+    unload_driver(driver).unwrap();
     Ok(())
-}
-
-#[dtor]
-fn exit() {
-    unload_delete_driver(DRIVER_PATH.get().unwrap()).unwrap();
 }

@@ -179,16 +179,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctor"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "990a40740adf249724a6000c0fc4bd574712f50bb17c2d6f6cec837ae2f0ee75"
-dependencies = [
- "quote",
- "syn",
-]
-
-[[package]]
 name = "ctrlc"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -469,10 +459,8 @@ version = "1.1.2"
 dependencies = [
  "anyhow",
  "clap",
- "ctor",
  "ctrlc",
  "dirs",
- "once_cell",
  "sysinfo",
  "windows-sys",
  "winres",

