@@ -16,6 +16,6 @@ fn main() {
 
     if let Err(e) = res.compile() {
         eprintln!("{}", e);
-        std::process::exit(1);
+        std::process::exit(1i32);
     }
 }

@@ -4,26 +4,22 @@ mod greet;
 mod utils;
 
 use crate::args::Args;
-use crate::driver::{kill_pid, load_driver, unload_driver};
+use crate::driver::{kill_pid, load_driver, unload_driver, Driver};
 use crate::utils::check_pid;
 use anyhow::anyhow;
 use clap::Parser;
 use std::ffi::CStr;
+use std::fs;
 use std::ops::Not;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::SyncSender;
-use std::{fs, process};
 
-fn init(sx: SyncSender<bool>) -> anyhow::Result<PathBuf> {
+/// Init whole program
+fn init() -> anyhow::Result<PathBuf> {
     let driver = include_bytes!("../driver/superman.sys");
 
     greet::greeting();
-
-    ctrlc::set_handler(move || {
-        println!("[+]Bye!");
-        sx.send(true).unwrap();
-    })?;
 
     let mut path = dirs::cache_dir().unwrap_or("C:\\Windows".into());
     path.push("Temp");
@@ -41,22 +37,31 @@ fn init(sx: SyncSender<bool>) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-fn main() {
-    let args = Args::parse();
+/// Init ctrl+C handler
+fn init_ctrlc(sx: SyncSender<bool>) -> anyhow::Result<()> {
+    ctrlc::set_handler(move || {
+        sx.send(true).unwrap();
+    })?;
 
-    if let Err(e) = try_main(&args) {
-        eprintln!("{}", e);
-        process::exit(1);
-    }
+    Ok(())
 }
 
-fn try_main(args: &Args) -> anyhow::Result<()> {
+fn main() {
+    let args = Args::parse();
+    let path = init().unwrap();
+    let service_name = CStr::from_bytes_with_nul(b"superman\0").unwrap().to_owned();
+
+    let driver = Driver::new(path, service_name);
+
+    if let Err(e) = try_main(&args, &driver) {
+        eprintln!("{}", e);
+    }
+    let _ = unload_driver(&driver);
+}
+
+fn try_main(args: &Args, driver: &Driver) -> anyhow::Result<()> {
     let (sx, rx) = mpsc::sync_channel(1);
-
-    let path = init(sx)?;
-    let service_name: &CStr = CStr::from_bytes_with_nul(b"superman\0").unwrap();
-
-    let driver: (&Path, &CStr) = (&path, service_name);
+    init_ctrlc(sx)?;
 
     if check_pid(args.pid).not() {
         return Err(anyhow!("[-]Process not exists!"));
@@ -65,7 +70,5 @@ fn try_main(args: &Args) -> anyhow::Result<()> {
     load_driver(driver)?;
 
     kill_pid(args, driver, rx)?;
-
-    unload_driver(driver).unwrap();
     Ok(())
 }

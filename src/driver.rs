@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::mem::{size_of_val, zeroed};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{addr_of, addr_of_mut, null, null_mut};
 use std::sync::mpsc::Receiver;
 use std::thread::sleep;
@@ -25,15 +25,37 @@ use windows_sys::Win32::System::Services::{
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
+pub struct Driver {
+    path: PathBuf,
+    service_name: CString,
+}
+
+impl Driver {
+    pub fn new(path: PathBuf, service_name: CString) -> Self {
+        Driver { path, service_name }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn service_name(&self) -> &CStr {
+        &self.service_name
+    }
+}
+
 /// Make sure driver status
-fn check_service_status(driver: (&Path, &CStr)) -> anyhow::Result<bool> {
+fn check_service_status(driver: &Driver) -> anyhow::Result<bool> {
     unsafe {
         let scm = OpenSCManagerA(null(), null(), SC_MANAGER_CREATE_SERVICE);
         if scm == 0 {
             return Err(anyhow!("[-]OpenSCManagerA failed {}!", GetLastError()));
         }
 
-        let service = OpenServiceA(scm, driver.1.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
+        let service = OpenServiceA(
+            scm,
+            driver.service_name().as_ptr().cast(),
+            SC_MANAGER_ALL_ACCESS,
+        );
         if service == 0 {
             CloseServiceHandle(scm);
             return Ok(false);
@@ -69,13 +91,13 @@ fn check_service_status(driver: (&Path, &CStr)) -> anyhow::Result<bool> {
     }
 }
 
-/// Load and start driver from path
-pub fn load_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
+/// Load and start driver
+pub fn load_driver(driver: &Driver) -> anyhow::Result<()> {
     if check_service_status(driver)? {
         return Ok(());
     }
 
-    let path = CString::new(driver.0.to_string_lossy().as_ref())?;
+    let path = CString::new(driver.path().to_string_lossy().as_ref())?;
 
     unsafe {
         let scm = OpenSCManagerA(null(), null(), SC_MANAGER_CREATE_SERVICE);
@@ -85,8 +107,8 @@ pub fn load_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
 
         let service = CreateServiceA(
             scm,
-            driver.1.as_ptr().cast(),
-            driver.1.as_ptr().cast(),
+            driver.service_name().as_ptr().cast(),
+            driver.service_name().as_ptr().cast(),
             SERVICE_START | DELETE | SERVICE_STOP,
             SERVICE_KERNEL_DRIVER,
             SERVICE_DEMAND_START,
@@ -122,8 +144,8 @@ pub fn load_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Unload and delete driver by name
-pub fn unload_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
+/// Unload and delete driver
+pub fn unload_driver(driver: &Driver) -> anyhow::Result<()> {
     let mut status: SERVICE_STATUS = unsafe { zeroed() };
 
     unsafe {
@@ -132,7 +154,11 @@ pub fn unload_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
             return Err(anyhow!("[-]OpenSCManagerA failed {}!", GetLastError()));
         }
 
-        let service = OpenServiceA(scm, driver.1.as_ptr().cast(), SC_MANAGER_ALL_ACCESS);
+        let service = OpenServiceA(
+            scm,
+            driver.service_name().as_ptr().cast(),
+            SC_MANAGER_ALL_ACCESS,
+        );
         if service == 0 {
             CloseServiceHandle(scm);
             return Err(anyhow!("[-]OpenServiceA failed {}!", GetLastError()));
@@ -157,15 +183,13 @@ pub fn unload_driver(driver: (&Path, &CStr)) -> anyhow::Result<()> {
         }
     }
 
-    if driver.0.exists() {
-        fs::remove_file(driver.0)?;
-    }
+    fs::remove_file(driver.path())?;
 
     Ok(())
 }
 
 /// Send ioctl to kill pid
-pub fn kill_pid(args: &Args, driver: (&Path, &CStr), rx: Receiver<bool>) -> anyhow::Result<()> {
+pub fn kill_pid(args: &Args, driver: &Driver, rx: Receiver<bool>) -> anyhow::Result<()> {
     let initialize_ioctl_code: u32 = 0x9876C004u32;
     let terminate_process_ioctl_code: u32 = 0x9876C094u32;
     let device_name = CStr::from_bytes_with_nul(b"\\\\.\\superman\0")?;
