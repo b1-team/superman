@@ -223,7 +223,6 @@ pub fn kill_pid(args: &Args, driver: &Driver, rx: Receiver<bool>) -> anyhow::Res
                 null_mut(),
             );
             if res == FALSE {
-                CloseHandle(device);
                 return Err(anyhow!("[-]DeviceIoControl failed {}!", GetLastError()));
             }
 
@@ -231,10 +230,9 @@ pub fn kill_pid(args: &Args, driver: &Driver, rx: Receiver<bool>) -> anyhow::Res
         });
 
         let kill = |pid| {
-            match device_io_control.borrow_mut()(terminate_process_ioctl_code, pid) {
-                Ok(_) => println!("[+]Process {} has been terminated!", pid),
-                Err(e) => eprintln!("{}", e),
-            };
+            if device_io_control.borrow_mut()(terminate_process_ioctl_code, pid).is_ok() {
+                println!("[+]Process {} has been terminated!", pid)
+            }
         };
 
         // Init driver
