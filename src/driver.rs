@@ -25,6 +25,7 @@ use windows_sys::Win32::System::Services::{
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
+/// Entry structure, representing a driver and its operations
 pub struct Driver {
     path: PathBuf,
     service_name: CString,
@@ -40,6 +41,21 @@ impl Driver {
     }
     pub fn service_name(&self) -> &CStr {
         &self.service_name
+    }
+
+    /// Load and start driver
+    pub fn load_driver(&self) -> anyhow::Result<()> {
+        load_driver(self)
+    }
+
+    /// Unload and delete driver
+    pub fn unload_driver(&self) -> anyhow::Result<()> {
+        unload_driver(self)
+    }
+
+    /// Send ioctl to kill pid
+    pub fn kill_pid(&self, args: &Args, rx: Receiver<bool>) -> anyhow::Result<()> {
+        kill_pid(self, args, rx)
     }
 }
 
@@ -84,15 +100,14 @@ fn check_service_status(driver: &Driver) -> anyhow::Result<bool> {
                 Ok(true)
             }
             _ => {
-                unload_driver(driver)?;
+                driver.unload_driver()?;
                 Ok(false)
             }
         }
     }
 }
 
-/// Load and start driver
-pub fn load_driver(driver: &Driver) -> anyhow::Result<()> {
+fn load_driver(driver: &Driver) -> anyhow::Result<()> {
     if check_service_status(driver)? {
         return Ok(());
     }
@@ -144,8 +159,7 @@ pub fn load_driver(driver: &Driver) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Unload and delete driver
-pub fn unload_driver(driver: &Driver) -> anyhow::Result<()> {
+fn unload_driver(driver: &Driver) -> anyhow::Result<()> {
     let mut status: SERVICE_STATUS = unsafe { zeroed() };
 
     unsafe {
@@ -188,8 +202,7 @@ pub fn unload_driver(driver: &Driver) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Send ioctl to kill pid
-pub fn kill_pid(args: &Args, driver: &Driver, rx: Receiver<bool>) -> anyhow::Result<()> {
+fn kill_pid(driver: &Driver, args: &Args, rx: Receiver<bool>) -> anyhow::Result<()> {
     let initialize_ioctl_code: u32 = 0x9876C004u32;
     let terminate_process_ioctl_code: u32 = 0x9876C094u32;
     let device_name = CStr::from_bytes_with_nul(b"\\\\.\\superman\0")?;
@@ -246,7 +259,7 @@ pub fn kill_pid(args: &Args, driver: &Driver, rx: Receiver<bool>) -> anyhow::Res
                 // exit
                 if rx.try_recv().is_ok() {
                     CloseHandle(device);
-                    unload_driver(driver)?;
+                    driver.unload_driver()?;
                     process::exit(0i32);
                 }
 

@@ -4,7 +4,7 @@ mod greet;
 mod utils;
 
 use crate::args::Args;
-use crate::driver::{kill_pid, load_driver, unload_driver, Driver};
+use crate::driver::Driver;
 use crate::utils::check_pid;
 use anyhow::anyhow;
 use clap::Parser;
@@ -56,19 +56,18 @@ fn main() {
     if let Err(e) = try_main(&args, &driver) {
         eprintln!("{}", e);
     }
-    let _ = unload_driver(&driver);
+    let _ = driver.unload_driver();
 }
 
 fn try_main(args: &Args, driver: &Driver) -> anyhow::Result<()> {
-    let (sx, rx) = mpsc::sync_channel(1);
+    let (sx, rx) = mpsc::sync_channel(0);
     init_ctrlc(sx)?;
 
     if check_pid(args.pid).not() {
         return Err(anyhow!("[-]Process not exists!"));
     }
 
-    load_driver(driver)?;
-
-    kill_pid(args, driver, rx)?;
+    driver.load_driver()?;
+    driver.kill_pid(args, rx)?;
     Ok(())
 }
