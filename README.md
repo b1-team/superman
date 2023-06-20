@@ -1,7 +1,9 @@
 # superman
-Kill everything.
+
+Kill The Protected Process
 
 ## usage
+
 ```shell
 Options:
   -p, --pid <PID>    Pid to kill
@@ -12,6 +14,7 @@ Options:
 ```
 
 Kill Windows Defender (MsMpEng.exe)
+
 ```shell
 superman.exe -p <PID> -r
 ```
