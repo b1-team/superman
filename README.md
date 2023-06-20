@@ -4,6 +4,8 @@
 
 Kill The Protected Process
 
+> This tool is limited to security research and teaching, and the user bears all legal and related responsibilities caused by the use of this tool! The author does not assume any legal and related responsibilities!
+
 ## usage
 
 ```shell
