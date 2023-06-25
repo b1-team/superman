@@ -1,9 +1,9 @@
 [package]
 name = "superman"
-version = "1.1.6"
+version = "1.1.7"
 edition = "2021"
 authors = ["b1n <b1nhack@proton.me>"]
-description = "Kill everything."
+description = "Kill The Protected Process"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -56,7 +56,7 @@ fn main() {
     if let Err(e) = try_main(&args, &driver) {
         eprintln!("{}", e);
     }
-    let _ = driver.unload_driver();
+    let _ = driver.unload();
 }
 
 fn try_main(args: &Args, driver: &Driver) -> anyhow::Result<()> {
@@ -67,7 +67,7 @@ fn try_main(args: &Args, driver: &Driver) -> anyhow::Result<()> {
         return Err(anyhow!("[-]Process not exists!"));
     }
 
-    driver.load_driver()?;
-    driver.kill_pid(args, rx)?;
+    driver.load()?;
+    driver.kill(args, rx)?;
     Ok(())
 }

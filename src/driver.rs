@@ -44,17 +44,17 @@ impl Driver {
     }
 
     /// Load and start driver
-    pub fn load_driver(&self) -> anyhow::Result<()> {
+    pub fn load(&self) -> anyhow::Result<()> {
         load_driver(self)
     }
 
     /// Unload and delete driver
-    pub fn unload_driver(&self) -> anyhow::Result<()> {
+    pub fn unload(&self) -> anyhow::Result<()> {
         unload_driver(self)
     }
 
     /// Send ioctl to kill pid
-    pub fn kill_pid(&self, args: &Args, rx: Receiver<bool>) -> anyhow::Result<()> {
+    pub fn kill(&self, args: &Args, rx: Receiver<bool>) -> anyhow::Result<()> {
         kill_pid(self, args, rx)
     }
 }
@@ -100,7 +100,7 @@ fn check_service_status(driver: &Driver) -> anyhow::Result<bool> {
                 Ok(true)
             }
             _ => {
-                driver.unload_driver()?;
+                driver.unload()?;
                 Ok(false)
             }
         }
@@ -208,6 +208,7 @@ fn kill_pid(driver: &Driver, args: &Args, rx: Receiver<bool>) -> anyhow::Result<
     let device_name = CStr::from_bytes_with_nul(b"\\\\.\\superman\0")?;
     let pid = args.pid;
     let mut output = 0u64;
+    let mut ret = 0u32;
 
     unsafe {
         let device = CreateFileA(
@@ -232,7 +233,7 @@ fn kill_pid(driver: &Driver, args: &Args, rx: Receiver<bool>) -> anyhow::Result<
                 u32::try_from(size_of_val(&pid))?,
                 addr_of_mut!(output).cast(),
                 u32::try_from(size_of_val(&output))?,
-                null_mut(),
+                addr_of_mut!(ret),
                 null_mut(),
             );
             if res == FALSE {
@@ -259,7 +260,7 @@ fn kill_pid(driver: &Driver, args: &Args, rx: Receiver<bool>) -> anyhow::Result<
                 // exit
                 if rx.try_recv().is_ok() {
                     CloseHandle(device);
-                    driver.unload_driver()?;
+                    driver.unload()?;
                     process::exit(0i32);
                 }
 
